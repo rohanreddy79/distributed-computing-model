@@ -1,6 +1,4 @@
 module GossipModule
-#r "nuget: Akka.FSharp" 
-#r "nuget: Akka.TestKit" 
 
 open System
 open Akka.Actor
@@ -191,20 +189,20 @@ let gossipSimulator noOfNodes topology algorithm=
     ///////////////////////////Program////////////////////////////////////////
     match topology with
     | "line" ->
-        nodeArray <- Array.zeroCreate (nodes + 1)
+        nodeArray <- Array.zeroCreate nodes
         
-        for x in [0..nodes] do
+        for x in [0..nodes-1] do
             let key: string = "demo" + string(x) 
             let actorRef = spawn system (key) Worker
             nodeArray.[x] <- actorRef 
             dictionary.Add(nodeArray.[x], false)
             nodeArray.[x] <! InitializeVariables x
 
-        for i in [ 0 .. nodes ] do
+        for i in [ 0 .. nodes-1 ] do
             let mutable neighbourArray = [||]
             if i = 0 then
                 neighbourArray <- (Array.append neighbourArray [|nodeArray.[i+1]|])
-            elif i = nodes then
+            elif i = nodes - 1 then
                 neighbourArray <- (Array.append neighbourArray [|nodeArray.[i-1]|])
             else 
                 neighbourArray <- (Array.append neighbourArray [| nodeArray.[(i - 1)] ; nodeArray.[(i + 1 ) ] |] ) 
@@ -231,9 +229,9 @@ let gossipSimulator noOfNodes topology algorithm=
             printfn "Invalid topology"   
 
     | "full" ->
-        nodeArray <- Array.zeroCreate (nodes + 1)
+        nodeArray <- Array.zeroCreate nodes
         
-        for x in [0..nodes] do
+        for x in [0..nodes-1] do
             let key: string = "demo" + string(x) 
             let actorRef = spawn system (key) Worker
             nodeArray.[x] <- actorRef 
@@ -241,9 +239,9 @@ let gossipSimulator noOfNodes topology algorithm=
             dictionary.Add(nodeArray.[x], false)
 
         
-        for i in [ 0 .. nodes ] do
+        for i in [ 0 .. nodes-1 ] do
             let mutable neighbourArray = [||]
-            for j in [0..nodes] do 
+            for j in [0..nodes-1] do 
                 if i <> j then
                     neighbourArray <- (Array.append neighbourArray [|nodeArray.[j]|])
             nodeArray.[i]<! Initailize(neighbourArray)
@@ -259,6 +257,8 @@ let gossipSimulator noOfNodes topology algorithm=
             supervisor <! Time(DateTime.Now.TimeOfDay.Milliseconds)
             printfn "------------- Begin Gossip -------------"
             nodeArray.[leader] <! CallWorker
+            // keep the rumour alive until every node has heard it 10 times (as the other topologies do)
+            GossipActor<! AddNeighbors
         | "push-sum" -> 
             supervisor <! TotalNodes(nodes)
             supervisor <! Time(DateTime.Now.TimeOfDay.Milliseconds)
@@ -269,9 +269,9 @@ let gossipSimulator noOfNodes topology algorithm=
 
     | "2D" ->
         let gridSize = nodes |> float |> sqrt |> ceil |> int 
-        nodeArray <- Array.zeroCreate (nodes+1)
+        nodeArray <- Array.zeroCreate nodes
         
-        for x in [0..nodes] do
+        for x in [0..nodes-1] do
             let key: string = "demo" + string(x) 
             let actorRef = spawn system (key) Worker
             
@@ -281,16 +281,19 @@ let gossipSimulator noOfNodes topology algorithm=
             
         for i in [ 0 .. (gridSize-1)] do
             for j in [ 0 .. (gridSize-1) ] do
-                let mutable neighbours: IActorRef [] = [||]
-                if j + 1 < gridSize then
-                    neighbours <- (Array.append neighbours [| nodeArray.[i * gridSize + j + 1] |])
-                if  j - 1 >= 0 then 
-                    neighbours <- (Array.append neighbours [| nodeArray.[i * gridSize + j - 1] |])
-                if i - 1 >= 0 then
-                    neighbours <- Array.append neighbours [| nodeArray.[(i - 1 ) * gridSize + j ] |]
-                if  i + 1 < gridSize then
-                    neighbours <- (Array.append neighbours [| nodeArray.[(i + 1) * gridSize + j] |])
-                nodeArray.[i * gridSize + j] <! Initailize(neighbours)
+                let index = i * gridSize + j
+                // only the first `nodes` cells of the gridSize x gridSize grid hold an actor
+                if index < nodes then
+                    let mutable neighbours: IActorRef [] = [||]
+                    if j + 1 < gridSize && index + 1 < nodes then
+                        neighbours <- (Array.append neighbours [| nodeArray.[i * gridSize + j + 1] |])
+                    if  j - 1 >= 0 then 
+                        neighbours <- (Array.append neighbours [| nodeArray.[i * gridSize + j - 1] |])
+                    if i - 1 >= 0 then
+                        neighbours <- Array.append neighbours [| nodeArray.[(i - 1 ) * gridSize + j ] |]
+                    if  i + 1 < gridSize && (i + 1) * gridSize + j < nodes then
+                        neighbours <- (Array.append neighbours [| nodeArray.[(i + 1) * gridSize + j] |])
+                    nodeArray.[index] <! Initailize(neighbours)
         
         //random worker to start the gossip
         let leader = Random().Next(0, nodes)
@@ -367,5 +370,6 @@ let gossipSimulator noOfNodes topology algorithm=
         | _ -> 
             printfn "Invalid topology"
     | _ -> ()
-    Console.ReadLine() |> ignore
+    // block until the Supervisor calls Environment.Exit (Console.ReadLine returned at once when stdin was not a terminal)
+    system.WhenTerminated.Wait()
     
